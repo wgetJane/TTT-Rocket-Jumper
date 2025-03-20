@@ -303,6 +303,14 @@ function SWEP:GardenerSwing()
 
 		if SERVER then
 			timer.Simple(meleeSwingDelay, function ()
+				if IsValid(self) then
+					self:EmitSound(self.Primary.HitSound)
+				end
+
+				if not (IsValid(ply) and IsValid(hitEnt)) then
+					return
+				end
+
 				local dmg = DamageInfo()
 				dmg:SetDamage(damageValue)
 				dmg:SetAttacker(ply)
@@ -314,14 +322,12 @@ function SWEP:GardenerSwing()
 				hitEnt:TakeDamageInfo(dmg)
 			end)
 		end
-		self:EmitSound(self.Primary.HitSound)
-
 	else
 		self:SendViewModelAnim(ACT_VM_MISSCENTER, VM_GARDEN)
 		ply:SetAnimation(PLAYER_ATTACK1)
-
-		self:EmitSound(self.Primary.MissSound)
 	end
+
+	self:EmitSound(self.Primary.MissSound)
 
 	if ttt_rocket_jumper_muh_skill_ceiling:GetBool() then
 		self:SetNextPrimaryFire( CurTime() )
