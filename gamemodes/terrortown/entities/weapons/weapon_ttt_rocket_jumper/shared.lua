@@ -48,13 +48,17 @@ SWEP.HoldType			 = "rpg"
 SWEP.HoldType1			 = "melee"
 
 SWEP.Primary.Delay       = 0.08
-SWEP.Primary.Automatic   = false
+SWEP.Primary.Automatic   = true
 SWEP.Primary.Ammo        = "none"
 SWEP.Primary.ClipSize    = -1
 SWEP.Primary.DefaultClip = -1
 
 SWEP.Primary.HitSound = Sound("Critical_Hit.mp3")
 SWEP.Primary.MissSound = Sound("Weapon_Crowbar.Single")
+
+SWEP.Secondary.Automatic = true
+
+SWEP.DeploySpeed = 12
 
 SWEP.ViewModel  = "models/weapons/v_rpg.mdl"
 SWEP.ViewModel0  = "models/weapons/v_rpg.mdl"
@@ -89,6 +93,7 @@ local jumperWeaponString = "weapon_ttt_rocket_jumper"
 -- each. Can be: WEAPON_... MELEE, PISTOL, HEAVY, NADE, CARRY, EQUIP1, EQUIP2 or ROLE.
 -- Matching SWEP.Slot values: 0      1       2     3      4      6       7        8
 SWEP.Kind = WEAPON_EQUIP1
+SWEP.Slot = 6
 
 -- If AutoSpawnable is true and SWEP.Kind is not WEAPON_EQUIP1/2, then this gun can
 -- be spawned as a random weapon.
@@ -123,6 +128,11 @@ SWEP.Spawnable = false
 SWEP.AdminSpawnable = true
 SWEP.ShouldDropOnDie = true
 
+local ttt_rocket_jumper_muh_skill_ceiling = CreateConVar(
+	"ttt_rocket_jumper_muh_skill_ceiling", "0", FCVAR_ARCHIVE + FCVAR_NOTIFY + FCVAR_REPLICATED,
+	"allow players to spam shots by rapidly clicking their mouse, what an epic display of video game skill"
+)
+
 local function GetAimedAtVector(ply)
 	local worldShootPos = ply:GetShootPos()
 	local viewTargetPos = ply:GetAimVector() * traceRange
@@ -149,28 +159,12 @@ local function IsJumping(ply)
 end
 
 function SWEP:SetupDataTables()
-	self:NetworkVar( "Bool", 0, "IsJumper" )
-
-	self:NetworkVarNotify( "IsJumper", self.JumperStateChange )
-end
-
--- it's easier to latch this on the netvar so the client doesn't
--- trip over prediction a boatload
-function SWEP:JumperStateChange( name, old, new )
-	if new ~= self.lastJumperState then
-		self.lastJumperState = new
-		if CLIENT then
-			if new then
-				self:BecomeJumper()
-			else
-				self:BecomeGardener()
-			end
-		end
-	end
+	self:NetworkVar( "Bool", "IsJumper" )
+	self:NetworkVar( "Bool", "FireKeyReleased" )
+	self:NetworkVar( "Float", "GroundedTime" )
 end
 
 function SWEP:Initialize()
-	self:NextThink(CurTime() + dropCheckInterval)
 	self:SetIsJumper(true)
 	if CLIENT then
 		self:RefreshTTT2HUDHelp()
@@ -187,6 +181,10 @@ end
 
 -- jumper attack
 function SWEP:PrimaryAttack()
+	if ttt_rocket_jumper_muh_skill_ceiling:GetBool() and not self:GetFireKeyReleased() then
+		return
+	end
+
 	if self:GetIsJumper() then
 		self:JumperFire()
 	else
@@ -194,39 +192,76 @@ function SWEP:PrimaryAttack()
 	end
 end
 
+-- M2 is equivalent to R+M1 but doesn't pull the melee out
+function SWEP:SecondaryAttack()
+	if ttt_rocket_jumper_muh_skill_ceiling:GetBool() and not self:GetFireKeyReleased() then
+		return
+	end
+
+	if CurTime() < self:GetNextPrimaryFire() then
+		return
+	end
+
+	if not self:GetIsJumper() then
+		self:BecomeJumper()
+	end
+
+	self:JumperFire(true)
+end
+
 function SWEP:Reload()
-	if SERVER and not self:GetIsJumper() then
+	if not self:GetIsJumper() then
 		self:BecomeJumper()
 	end
 end
 
-function SWEP:JumperFire()
+function SWEP:JumperFire(secondary)
 	local ply = self:GetOwner()
 
+	if not (IsValid(ply) and ply:IsPlayer()) then
+		return
+	end
+
+	ply:LagCompensation(true)
 	local worldTargetPos, isInRange = GetAimedAtVector(ply)
+	ply:LagCompensation(false)
 
 	if isInRange then
+		local addvel = ply:GetAimVector()
+
+		addvel:Mul(-thrustSpeed)
+
+		-- +50% self-knockback while crouched like in tf2
+		if not ply:IsFlagSet(FL_DUCKING	+ FL_ANIMDUCKING) then
+			addvel:Div(1.5)
+		end
+
+		ply:SetLocalVelocity(ply:GetVelocity() + addvel)
+
+		ply:RemoveFlags( FL_ONGROUND )
+
 		if SERVER then
-			ply:SetVelocity(-ply:GetAimVector() * thrustSpeed)
-
 			spawnExplosion(worldTargetPos)
+		end
 
-			self:EmitSound(shootSound)
+		self:EmitSound(shootSound)
 
+		if secondary then
+			self:SendViewModelAnim(ACT_VM_PRIMARYATTACK, VM_JUMPER )
+		else
+			self:SendViewModelAnim(ACT_RANGE_ATTACK_RPG, VM_JUMPER )
 			self:BecomeGardener()
 		end
 
-		self:RemoveFlags( FL_ONGROUND )
-
-		self:SendWeaponAnim(ACT_RANGE_ATTACK_RPG, VM_JUMPER )
 		ply:SetAnimation(PLAYER_ATTACK1)
-		self:SetNextPrimaryFire( CurTime() + self:SequenceDuration() + 0.1)
 
-		local nextThink = CurTime() + dropCheckInterval
-		self:NextThink(nextThink)
-		if CLIENT then
-			self:SetNextClientThink(nextThink)
+		if ttt_rocket_jumper_muh_skill_ceiling:GetBool() then
+			self:SetNextPrimaryFire( CurTime() )
+		else
+			self:SetNextPrimaryFire( CurTime() + 0.5 )
 		end
+
+		self:SetFireKeyReleased(false)
 	end
 end
 
@@ -240,23 +275,25 @@ function SWEP:GardenerSwing()
 	local tMin = Vector(1, 1, 1) * -gardenerExtents
 	local tMax = Vector(1, 1, 1) * gardenerExtents
 
-	local tr = util.TraceHull({
-		start = shootPos,
-		endpos = endShootPos,
-		filter = ply,
-		mask = MASK_SHOT_HULL,
-		mins = tMin,
-		maxs = tMax
-	})
-
-	if not IsValid(tr.Entity) then
-		tr = util.TraceLine({
+	local tr = util.TraceLine({
 		start = shootPos,
 		endpos = endShootPos,
 		mask = MASK_SHOT_HULL,
 		filter = ply
+	})
+
+	if not IsValid(tr.Entity) then
+		tr = util.TraceHull({
+			start = shootPos,
+			endpos = endShootPos,
+			filter = ply,
+			mask = MASK_SHOT_HULL,
+			mins = tMin,
+			maxs = tMax
 		})
 	end
+
+	ply:LagCompensation(false)
 
 	local hitEnt = tr.Entity
 
@@ -279,28 +316,30 @@ function SWEP:GardenerSwing()
 		end
 		self:EmitSound(self.Primary.HitSound)
 
-	elseif not IsValid(hitEnt) then
+	else
 		self:SendViewModelAnim(ACT_VM_MISSCENTER, VM_GARDEN)
 		ply:SetAnimation(PLAYER_ATTACK1)
 
 		self:EmitSound(self.Primary.MissSound)
 	end
-	local delay = self:SequenceDuration()
-	self:SetNextPrimaryFire(CurTime() + delay + 0.1)
 
-	ply:LagCompensation(false)
+	if ttt_rocket_jumper_muh_skill_ceiling:GetBool() then
+		self:SetNextPrimaryFire( CurTime() )
+	else
+		self:SetNextPrimaryFire( CurTime() + 0.5 )
+	end
+
+	self:SetFireKeyReleased(false)
 end
 
 function SWEP:BecomeGardener()
-	if SERVER then
-		self:SetIsJumper(false)
-	end
+	self:SetIsJumper(false)
 
-	self:SetModel( self.WorldModel1 )
 	self.WorldModel = self.WorldModel1
-    -- lil hack to simulate jumper holster anim
+	self:SetModel( self.WorldModel )
+	-- lil hack to simulate jumper holster anim
 	self:SendViewModelAnim( ACT_VM_DRAW, VM_JUMPER, -swapSpeed)
-	self:SendViewModelAnim( ACT_VM_DRAW , VM_GARDEN, swapSpeed)
+	self:SendViewModelAnim( ACT_VM_DRAW , VM_GARDEN)
 	self:SetHoldType("melee")
 	if CLIENT then
 		self:RefreshTTT2HUDHelp()
@@ -308,12 +347,10 @@ function SWEP:BecomeGardener()
 end
 
 function SWEP:BecomeJumper()
-	if SERVER then
-		self:SetIsJumper(true)
-	end
+	self:SetIsJumper(true)
 
-	self:SetModel( self.WorldModel0 )
 	self.WorldModel = self.WorldModel0
+	self:SetModel( self.WorldModel )
 	self:SendViewModelAnim( ACT_VM_HOLSTER, VM_GARDEN, swapSpeed)
 	self:SendViewModelAnim( ACT_VM_DRAW, VM_JUMPER, swapSpeed)
 	self:SetHoldType("rpg")
@@ -323,7 +360,9 @@ function SWEP:BecomeJumper()
 end
 
 function SWEP:Deploy()
-	if SERVER and not self:GetIsJumper() then
+	self:SetFireKeyReleased(true)
+
+	if not self:GetIsJumper() then
 		self:SetNextPrimaryFire(CurTime() + dropCheckInterval * deployLag)
 	end
 
@@ -357,10 +396,6 @@ function SWEP:Holster()
 end
 
 function SWEP:SendViewModelAnim( act , index , rate )
-	if ( not game.SinglePlayer() and not IsFirstTimePredicted() ) then
-		return
-	end
-
 	local vm = self:GetOwner():GetViewModel( index )
 
 	if ( not IsValid( vm ) ) then
@@ -379,22 +414,35 @@ end
 
 function SWEP:Think()
 	local ply = self:GetOwner()
-	if not self:GetIsJumper() then
-		if IsValid(ply) and (ply:OnGround() or ply:WaterLevel() ~= 0) then
-			if SERVER then
-				self:BecomeJumper()
-			end
-		else
-			local nextThink = CurTime() + dropCheckInterval
-			self:NextThink(nextThink)
-			if CLIENT then
-				self:SetNextClientThink(nextThink)
-			end
+
+	if IsValid(ply) and ply:IsPlayer() and (ply:KeyReleased(IN_ATTACK) or ply:KeyReleased(IN_ATTACK2)) then
+		self:SetFireKeyReleased(true)
+	end
+
+	-- this lets people bhop to retain the market gardener crit like in tf2
+
+	if not IsValid(ply) or self:GetIsJumper() or not (ply:OnGround() or ply:WaterLevel() ~= 0) then
+		if self:GetGroundedTime() ~= 0 then
+			self:SetGroundedTime(0)
 		end
+
+		return
+	end
+
+	self:SetGroundedTime(self:GetGroundedTime() + FrameTime())
+
+	if self:GetGroundedTime() > 0.05 then
+		self:SetGroundedTime(0)
+		self:BecomeJumper()
 	end
 end
 
 function SWEP:RefreshTTT2HUDHelp()
+	if not self.AddHUDHelpLine then
+		-- base ttt doesnt have this function
+		return
+	end
+
 	self.HUDHelp = {
 		bindingLines = {},
 		maxLength = 0
@@ -407,13 +455,6 @@ function SWEP:RefreshTTT2HUDHelp()
 		self:AddHUDHelpLine("market_gardener_cancel", Key("+reload", "R"))
 	end
 end
-
-hook.Add("OnPlayerHitGround", "market_gardener__DropMeleeOnFall", function(ply, inWater, onFloater, speed)
-	local wep = ply:GetActiveWeapon()
-	if SERVER and IsValid(wep) and wep:GetClass() == jumperWeaponString and (not wep:GetIsJumper()) and ply:IsPlayer() then
-		wep:BecomeJumper()
-	end
-end)
 
 if SERVER then
 	-- rocket jumper logic
