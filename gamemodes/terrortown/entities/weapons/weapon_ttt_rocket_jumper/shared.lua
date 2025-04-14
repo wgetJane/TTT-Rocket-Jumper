@@ -10,6 +10,7 @@ if SERVER then
 	AddCSLuaFile()
 
 	resource.AddFile("materials/vgui/ttt/rocketjumper_icon.vmt")
+	resource.AddFile("sound/Critical_Hit.mp3")
 end
 
 -- Equipment menu information is only needed on the client
@@ -81,12 +82,10 @@ local ttt_rocket_jumper_melee_damage = CreateConVar(
 	"ttt_rocket_jumper_melee_damage", "1000", FCVAR_ARCHIVE + FCVAR_NOTIFY + FCVAR_REPLICATED
 )
 
-local ttt_rocket_jumper_melee_delay = CreateConVar(
-	"ttt_rocket_jumper_melee_delay", "0.05", FCVAR_ARCHIVE + FCVAR_NOTIFY + FCVAR_REPLICATED
-)
 
 -- Make sure this is equal to their lua-filenames
 local jumperWeaponString = "weapon_ttt_rocket_jumper"
+local meleeWeaponString = "weapon_zm_improvised"
 
 
 --- TTT config values
@@ -158,7 +157,7 @@ function SWEP:Initialize()
 				bindingLines = {},
 				maxLength = 0
 			}
-			self:AddHUDHelpLine(self.Instructions, Key("slot1", "undefined_key"))
+			self:AddHUDHelpLine(self.Instructions, Key("+reload", "undefined_key"))
 		else
 			self:AddHUDHelp(self.Instructions, nil, false)
 		end
@@ -192,8 +191,6 @@ function SWEP:PrimaryAttack()
 	end
 
 	ply:SetLocalVelocity(ply:GetVelocity() + addvel)
-
-	ply:RemoveFlags(FL_ONGROUND)
 
 	ply:SetAnimation(PLAYER_ATTACK1)
 
@@ -235,6 +232,42 @@ function SWEP:Holster()
 	return true
 end
 
+if CLIENT then
+	hook.Add("CreateMove", "ttt_rocket_jumper_ReloadQuickSwitch", function(cmd)
+		local ply = LocalPlayer()
+
+		if not (IsValid(ply) and ply:KeyPressed(IN_RELOAD)) then
+			return
+		end
+
+		local oldwep = ply:GetActiveWeapon()
+
+		if not IsValid(oldwep) then
+			return
+		end
+
+		local oldclass = oldwep:GetClass()
+
+		local newclass = (
+			oldclass == jumperWeaponString and meleeWeaponString
+			or oldclass == meleeWeaponString and jumperWeaponString
+			or nil
+		)
+
+		if not newclass then
+			return
+		end
+
+		local newwep = ply:GetWeapon(newclass)
+
+		if not IsValid(newwep) then
+			return
+		end
+
+		cmd:SelectWeapon(newwep)
+	end)
+end
+
 local function blastjumpproxy(self, name, old, new)
 	return self:OnRocketJumperBlastJumpingUpdated(new)
 end
@@ -254,7 +287,7 @@ local Player = FindMetaTable("Player")
 local MarketGardenerNewPrimaryAttack
 
 function Player:OnRocketJumperBlastJumpingUpdated(isjumping)
-	local melee = self:GetWeapon("weapon_zm_improvised")
+	local melee = self:GetWeapon(meleeWeaponString)
 
 	if not IsValid(melee) then
 		return
@@ -279,7 +312,7 @@ end
 
 hook.Add("PlayerPostThink", "ttt_rocket_jumper_PlayerPostThink", function(ply)
 	-- this lets people bhop to retain the market gardener crit like in tf2
-	
+
 	if not ply:GetNW2Bool("ttt_rocket_jumper_isblastjumping", false) then
 		return
 	end
@@ -353,7 +386,7 @@ local function GardenerSwing(self)
 	self:SendWeaponAnim(ACT_VM_HITCENTER)
 	ply:SetAnimation(PLAYER_ATTACK1)
 
-	timer.Simple(ttt_rocket_jumper_melee_delay:GetFloat(), function()
+	timer.Simple(0.05, function()
 		if not (IsValid(self) and IsValid(ply) and IsValid(hitEnt)) then
 			return
 		end
