@@ -190,7 +190,13 @@ function SWEP:PrimaryAttack()
 		addvel:Div(ttt_rocket_jumper_crouched_mult:GetFloat())
 	end
 
-	ply:SetLocalVelocity(ply:GetVelocity() + addvel)
+	local newvel = ply:GetVelocity() + addvel
+
+	ply:SetLocalVelocity(newvel)
+
+	if newvel.z > 1 then
+		ply:RemoveFlags(FL_ONGROUND)
+	end
 
 	ply:SetAnimation(PLAYER_ATTACK1)
 
